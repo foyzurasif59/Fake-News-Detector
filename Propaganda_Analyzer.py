@@ -1,83 +1,66 @@
+import tkinter as tk
+from tkinter import ttk, messagebox
 from urllib.request import Request, urlopen
 from urllib.parse import quote, urlparse
 from html.parser import HTMLParser
 import re
 
 
-
-# HTML READER
-
+# ---------- WEB PAGE READER ----------
 
 class Reader(HTMLParser):
-
     def __init__(self):
         super().__init__()
         self.title = ""
         self.text = ""
-        self.intitle = False
+        self.inside_title = False
         self.skip = False
 
     def handle_starttag(self, tag, attrs):
-
         if tag == "title":
-            self.intitle = True
-
+            self.inside_title = True
         if tag in ["script", "style", "noscript"]:
             self.skip = True
 
     def handle_endtag(self, tag):
-
         if tag == "title":
-            self.intitle = False
-
+            self.inside_title = False
         if tag in ["script", "style", "noscript"]:
             self.skip = False
 
     def handle_data(self, data):
-
         if self.skip:
             return
 
         data = re.sub(r"\s+", " ", data).strip()
 
-        if self.intitle:
+        if self.inside_title:
             self.title += data + " "
 
         if len(data) > 20:
             self.text += data + " "
 
 
+# ---------- DOWNLOAD PAGE ----------
 
-# GET WEB PAGE
-
-
-def get(url):
-
+def get_page(url):
     try:
-
         req = Request(
             url,
             headers={"User-Agent": "Mozilla/5.0"}
         )
 
-        return urlopen(req, timeout=10).read().decode(
-            "utf-8", "ignore"
-        )
+        page = urlopen(req, timeout=10)
+        return page.read().decode("utf-8", "ignore")
 
-    except Exception as e:
-
-        print("Web error:", e)
-
+    except:
         return ""
 
 
+# ---------- READ ARTICLE ----------
 
-# READ ARTICLE
-
-
-def article(url):
-
-    html = get(url)
+def read_article(url):
+    html = get_page(url)
 
     if not html:
         return "", ""
@@ -85,24 +68,23 @@ def article(url):
     p = Reader()
     p.feed(html)
 
-    return p.title.strip(), p.text.strip()
+    title = p.title.strip()
+    text = p.text.strip()
+
+    return title, text
 
 
+# ---------- GOOGLE NEWS SEARCH ----------
 
-# GOOGLE NEWS
-
-
-def news(title):
-
+def search_news(title):
     try:
-
         url = (
             "https://news.google.com/rss/search?q="
             + quote(title)
             + "&hl=en-US&gl=US&ceid=US:en"
         )
 
-        xml = get(url)
+        xml = get_page(url)
 
         titles = re.findall(
             r"<title>(.*?)</title>",
@@ -110,22 +92,20 @@ def news(title):
             re.S
         )
 
-        return [
+        titles = [
             re.sub("<.*?>", "", x).strip()
-            for x in titles[1:9]
+            for x in titles[1:]
         ]
 
-    except:
+        return titles[:8]
 
+    except:
         return []
 
 
-
-# WORDS
-
+# ---------- SIMPLE TEXT TO WORDS ----------
 
 def words(text):
-
     return set(
         re.findall(
             r"[a-zA-Z]{3,}",
@@ -134,9 +114,7 @@ def words(text):
     )
 
 
-
-# SIMILARITY
-
+# ---------- TITLE SIMILARITY ----------
 
 def similarity(a, b):
 
@@ -147,13 +125,11 @@ def similarity(a, b):
         return 0
 
     return round(
-        len(a & b) / len(a | b) * 100,
-        1
+        len(a & b) / len(a | b) * 100
     )
 
 
-# CLICKBAIT
-
+# ---------- CLICKBAIT ----------
 
 def clickbait(title):
 
@@ -168,6 +144,7 @@ def clickbait(title):
         "urgent",
         "miracle",
         "viral",
+        "they don't want you to know",
         "incredible"
     ]
 
@@ -182,8 +159,7 @@ def clickbait(title):
     return min(score, 100)
 
 
-# SUSPICIOUS WORDS
-
+# ---------- SUSPICIOUS WORDS ----------
 
 def suspicious(text):
 
@@ -210,9 +186,7 @@ def suspicious(text):
     return min(n * 8, 100)
 
 
-
-# SOURCE CHECK
-
+# ---------- SOURCE CHECK ----------
 
 def source_score(url):
 
@@ -230,17 +204,21 @@ def source_score(url):
         "theguardian.com",
         "aljazeera.com",
         "cbsnews.com",
-        "nbcnews.com"
+        "nbcnews.com",
+        "abcnews.go.com"
     ]
 
-    return 25 if any(x in site for x in trusted) else 0
+    for x in trusted:
+
+        if x in site:
+            return 25
+
+    return 0
 
 
+# ---------- MAIN ANALYSIS ----------
 
-# ANALYSIS
-
-
-def analyze(url, title, text):
+def analyze(url, headline):
 
     score = 50
 
@@ -251,19 +229,16 @@ def analyze(url, title, text):
 
         score += source_score(url)
 
-    cb = clickbait(title)
-
-    sp = suspicious(
-        title + " " + text[:3000]
-    )
+    cb = clickbait(headline)
+    sp = suspicious(headline)
 
     score -= cb // 4
     score -= sp // 5
 
-    results = news(title)
+    results = search_news(headline)
 
     matches = [
-        similarity(title, x)
+        similarity(headline, x)
         for x in results
     ]
 
@@ -278,115 +253,323 @@ def analyze(url, title, text):
     elif best < 15:
         score -= 8
 
-    score = max(
-        0,
-        min(100, score)
-    )
+    score = max(0, min(100, score))
 
     return score, cb, sp, best, results
 
 
+# ---------- GUI ----------
 
-# RUN PROGRAM
+root = tk.Tk()
 
-
-print("=" * 60)
-print("        LIVE NEWS CREDIBILITY ANALYZER")
-print("=" * 60)
-
-url = input(
-    "\nEnter News URL (leave empty for headline): "
-).strip()
-
-headline = ""
-
-if url:
-
-    print("\nReading live article...")
-
-    headline, text = article(url)
-
-    if not headline:
-
-        print("\nCould not read this webpage.")
-        print("Try entering the headline manually.")
-
-        headline = input(
-            "\nEnter headline: "
-        ).strip()
-
-        text = ""
-
-else:
-
-    headline = input(
-        "\nEnter News Headline: "
-    ).strip()
-
-    text = ""
+root.title("Live News Credibility Analyzer")
+root.geometry("1000x700")
+root.configure(bg="#101827")
 
 
-if headline:
+# ---------- STYLE ----------
 
-    print("\nChecking live news sources...")
+style = ttk.Style()
+style.theme_use("clam")
+
+style.configure(
+    "TButton",
+    font=("Segoe UI", 11, "bold"),
+    padding=10
+)
+
+style.configure(
+    "TEntry",
+    font=("Segoe UI", 12)
+)
+
+style.configure(
+    "TLabel",
+    background="#101827",
+    foreground="white"
+)
+
+
+# ---------- TITLE ----------
+
+tk.Label(
+    root,
+    text="LIVE NEWS CREDIBILITY ANALYZER",
+    font=("Segoe UI", 24, "bold"),
+    bg="#101827",
+    fg="white"
+).pack(pady=(25, 5))
+
+
+tk.Label(
+    root,
+    text="Check a live news article using simple credibility signals",
+    font=("Segoe UI", 11),
+    bg="#101827",
+    fg="#9ca3af"
+).pack()
+
+
+# ---------- INPUT ----------
+
+box = tk.Frame(
+    root,
+    bg="#172235"
+)
+
+box.pack(
+    fill="x",
+    padx=30,
+    pady=25
+)
+
+
+tk.Label(
+    box,
+    text="News URL",
+    font=("Segoe UI", 11, "bold"),
+    bg="#172235",
+    fg="white"
+).pack(
+    anchor="w",
+    padx=20,
+    pady=(15, 5)
+)
+
+
+url_entry = ttk.Entry(box)
+
+url_entry.pack(
+    fill="x",
+    padx=20,
+    ipady=8
+)
+
+
+tk.Label(
+    box,
+    text="OR enter a news headline",
+    font=("Segoe UI", 10),
+    bg="#172235",
+    fg="#9ca3af"
+).pack(
+    anchor="w",
+    padx=20,
+    pady=(12, 5)
+)
+
+
+headline_entry = ttk.Entry(box)
+
+headline_entry.pack(
+    fill="x",
+    padx=20,
+    ipady=8
+)
+
+
+# ---------- RESULT ----------
+
+result = tk.Frame(
+    root,
+    bg="#172235"
+)
+
+result.pack(
+    fill="both",
+    expand=True,
+    padx=30
+)
+
+
+score_label = tk.Label(
+    result,
+    text="--",
+    font=("Segoe UI", 42, "bold"),
+    bg="#172235",
+    fg="white"
+)
+
+score_label.pack(pady=(20, 0))
+
+
+status_label = tk.Label(
+    result,
+    text="Enter a URL or headline",
+    font=("Segoe UI", 18, "bold"),
+    bg="#172235",
+    fg="#9ca3af"
+)
+
+status_label.pack(pady=5)
+
+
+details = tk.Label(
+    result,
+    text="",
+    justify="left",
+    font=("Segoe UI", 11),
+    bg="#172235",
+    fg="#d1d5db"
+)
+
+details.pack(pady=10)
+
+
+# ---------- SEARCH RESULTS ----------
+
+news_box = tk.Text(
+    result,
+    height=8,
+    bg="#0f172a",
+    fg="#dbeafe",
+    insertbackground="white",
+    font=("Segoe UI", 10),
+    relief="flat"
+)
+
+news_box.pack(
+    fill="both",
+    expand=True,
+    padx=20,
+    pady=15
+)
+
+
+# ---------- ANALYZE ----------
+
+def check():
+
+    url = url_entry.get().strip()
+    headline = headline_entry.get().strip()
+
+    if not url and not headline:
+
+        messagebox.showwarning(
+            "Missing information",
+            "Enter a news URL or headline."
+        )
+
+        return
+
+
+    if url:
+
+        status_label.config(
+            text="Reading live article..."
+        )
+
+        root.update()
+
+        title, text = read_article(url)
+
+        if title:
+
+            headline = title
+
+        if not headline:
+
+            messagebox.showerror(
+                "Error",
+                "Could not extract the article headline."
+            )
+
+            return
+
+
+    status_label.config(
+        text="Checking live news sources..."
+    )
+
+    root.update()
+
 
     score, cb, sp, best, results = analyze(
         url,
-        headline,
-        text
+        headline
     )
 
-    print("\n" + "=" * 60)
-    print("                 RESULT")
-    print("=" * 60)
 
-    print("\nHeadline:")
-    print(headline)
-
-    print("\nCredibility Score:", score, "/100")
+    # ---------- VERDICT ----------
 
     if score >= 75:
 
-        print("Verdict: 🟢 LIKELY CREDIBLE")
+        verdict = "🟢 LIKELY CREDIBLE"
+        color = "#22c55e"
 
     elif score >= 50:
 
-        print("Verdict: 🟡 NEEDS VERIFICATION")
+        verdict = "🟡 NEEDS VERIFICATION"
+        color = "#f59e0b"
 
     else:
 
-        print("Verdict: 🔴 HIGH RISK / SUSPICIOUS")
+        verdict = "🔴 HIGH RISK / SUSPICIOUS"
+        color = "#ef4444"
 
-    print("\nClickbait Score:", cb, "/100")
-    print("Suspicious Language:", sp, "/100")
-    print("Best News Match:", best, "%")
-    print("Other Reports Found:", len(results))
 
-    print("\n" + "-" * 60)
-    print("CORROBORATING NEWS")
-    print("-" * 60)
+    score_label.config(
+        text=f"{score}/100",
+        fg=color
+    )
+
+    status_label.config(
+        text=verdict,
+        fg=color
+    )
+
+
+    details.config(
+        text=
+        f"Headline:\n{headline[:180]}\n\n"
+        f"Clickbait score:       {cb}/100\n"
+        f"Suspicious language:   {sp}/100\n"
+        f"Best news match:       {best:.1f}%\n"
+        f"Other reports found:   {len(results)}\n\n"
+        "This score is an indicator, not proof that a story is true or false."
+    )
+
+
+    news_box.delete(
+        "1.0",
+        tk.END
+    )
+
 
     if results:
 
+        news_box.insert(
+            tk.END,
+            "LIVE CORROBORATING NEWS\n"
+            "========================\n\n"
+        )
+
         for i, x in enumerate(results, 1):
 
-            print(
-                f"{i}. {x}"
-            )
-
-            print(
-                f"   Similarity: {similarity(headline, x)}%"
+            news_box.insert(
+                tk.END,
+                f"{i}. {x}\n\n"
             )
 
     else:
 
-        print("No matching reports found.")
+        news_box.insert(
+            tk.END,
+            "No matching news reports were found."
+        )
 
-    print("\n" + "=" * 60)
-    print("NOTE: This is a credibility indicator,")
-    print("not proof that a news story is true or false.")
-    print("=" * 60)
 
-else:
+# ---------- BUTTON ----------
 
-    print("\nNo headline provided.")
+ttk.Button(
+    box,
+    text="🔍  ANALYZE NEWS",
+    command=check
+).pack(
+    pady=18
+)
+
+
+# ---------- START ----------
+
+root.mainloop()
